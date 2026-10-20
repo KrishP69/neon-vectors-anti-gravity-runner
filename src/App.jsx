@@ -161,6 +161,72 @@ const SECTORS = [
 ];
 
 /* =========================================================================
+   DYNAMIC DIFFICULTY SELECTOR CONFIGURATION (4 TIERS)
+   ========================================================================= */
+export const DIFFICULTY_CONFIG = {
+  EASY: {
+    key: 'EASY',
+    name: 'EASY',
+    label: 'Chill / Casual',
+    speedMultiplier: 0.65,
+    minGap: 420,
+    maxGap: 580,
+    maxMidAirCharges: 2,
+    startShieldTime: 15,
+    color: '#10b981', // Emerald
+    badgeClass: 'border-emerald-500/60 bg-emerald-500/15 text-emerald-400',
+    glowClass: 'shadow-[0_0_15px_rgba(16,185,129,0.35)]',
+    description: 'Casual speed, generous 450px+ gaps, 2 mid-air flips, free starting shield & simple traps.',
+    tag: '2 Mid-Air Flips + Shield',
+  },
+  NORMAL: {
+    key: 'NORMAL',
+    name: 'NORMAL',
+    label: 'Balanced Arcade',
+    speedMultiplier: 0.85,
+    minGap: 300,
+    maxGap: 440,
+    maxMidAirCharges: 1,
+    startShieldTime: 0,
+    color: '#00f3ff', // Cyan
+    badgeClass: 'border-cyan-500/60 bg-cyan-500/15 text-cyan-400',
+    glowClass: 'shadow-[0_0_15px_rgba(0,243,255,0.35)]',
+    description: 'Fun & rhythmic challenge with progressive sector trap unlocks and fair reaction windows.',
+    tag: 'Progressive Traps (Default)',
+  },
+  HARD: {
+    key: 'HARD',
+    name: 'HARD',
+    label: 'Veteran Reflex',
+    speedMultiplier: 1.05,
+    minGap: 220,
+    maxGap: 330,
+    maxMidAirCharges: 1,
+    startShieldTime: 0,
+    color: '#f59e0b', // Amber
+    badgeClass: 'border-amber-500/60 bg-amber-500/15 text-amber-400',
+    glowClass: 'shadow-[0_0_15px_rgba(245,158,11,0.35)]',
+    description: 'Chained gauntlets and faster drones with 0.5s telegraph warnings before moving traps.',
+    tag: '0.5s Telegraph Warnings',
+  },
+  HELL: {
+    key: 'HELL',
+    name: 'HELL',
+    label: 'Nightmare Protocol',
+    speedMultiplier: 1.30,
+    minGap: 150,
+    maxGap: 230,
+    maxMidAirCharges: 1,
+    startShieldTime: 0,
+    color: '#ff003c', // Blood Crimson
+    badgeClass: 'border-rose-500/70 bg-rose-500/20 text-rose-400',
+    glowClass: 'shadow-[0_0_18px_rgba(255,0,60,0.45)]',
+    description: 'All 12 lethal traps active from Sector 01 at extreme demon density. Pure twitch reflex.',
+    tag: 'Extreme Demon Gauntlet',
+  },
+};
+
+/* =========================================================================
    PROCEDURAL WEB AUDIO SYNTHESIZER
    ========================================================================= */
 class HellAudioEngine {
@@ -403,6 +469,23 @@ class HellAudioEngine {
       osc.stop(now + idx * 0.07 + 0.38);
     });
   }
+
+  playDifficultySwitch() {
+    if (this.muted || !this.ctx) return;
+    this.init();
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(520, now);
+    osc.frequency.exponentialRampToValueAtTime(1040, now + 0.1);
+    gain.gain.setValueAtTime(0.18, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.13);
+  }
 }
 
 const audio = new HellAudioEngine();
@@ -420,6 +503,22 @@ export default function App() {
   const [soundMuted, setSoundMuted] = useState(false);
   const [scanlinesActive, setScanlinesActive] = useState(true);
 
+  // Difficulty Protocol State (EASY | NORMAL | HARD | HELL)
+  const [difficulty, setDifficulty] = useState(() => {
+    try {
+      const savedDiff = localStorage.getItem('neon_vectors_difficulty');
+      if (savedDiff && DIFFICULTY_CONFIG[savedDiff]) return savedDiff;
+      const savedState = localStorage.getItem('neon_vectors_hell_protocol_v3');
+      if (savedState) {
+        const parsed = JSON.parse(savedState);
+        if (parsed.difficulty && DIFFICULTY_CONFIG[parsed.difficulty]) return parsed.difficulty;
+      }
+    } catch (e) {
+      console.warn('LocalStorage difficulty error:', e);
+    }
+    return 'NORMAL';
+  });
+
   // Live HUD States
   const [hudDistance, setHudDistance] = useState(0);
   const [hudScore, setHudScore] = useState(0);
@@ -429,7 +528,7 @@ export default function App() {
   const [hudShieldTime, setHudShieldTime] = useState(0);
   const [hudSlowMoTime, setHudSlowMoTime] = useState(0);
   const [hudMagnetTime, setHudMagnetTime] = useState(0);
-  const [hudMidAirReady, setHudMidAirReady] = useState(true);
+  const [hudMidAirCharges, setHudMidAirCharges] = useState(1);
   const [hudGravityDir, setHudGravityDir] = useState(1);
 
   // Modal Summary Stats
@@ -451,6 +550,7 @@ export default function App() {
   const gameRef = useRef({
     active: false,
     sector: SECTORS[0],
+    difficulty: 'NORMAL',
     width: 1200,
     height: 600,
     corridorTop: 70,
@@ -467,7 +567,8 @@ export default function App() {
       baseGravity: 5400,
       maxVy: 1440,
       grounded: true,
-      midAirCharge: true,
+      midAirCharges: 1,
+      maxMidAirCharges: 1,
       scaleX: 1,
       scaleY: 1,
       tilt: 0,
@@ -530,30 +631,70 @@ export default function App() {
         if (parsed.unlockedSectorMax) setUnlockedSectorMax(parsed.unlockedSectorMax);
         if (parsed.highScores) setHighScores(parsed.highScores);
         if (parsed.attemptCount) setAttemptCount(parsed.attemptCount);
+        if (parsed.difficulty && DIFFICULTY_CONFIG[parsed.difficulty]) {
+          setDifficulty(parsed.difficulty);
+          if (gameRef.current) gameRef.current.difficulty = parsed.difficulty;
+        }
         if (parsed.soundMuted !== undefined) {
           setSoundMuted(parsed.soundMuted);
           audio.setMuted(parsed.soundMuted);
         }
         if (parsed.scanlinesActive !== undefined) setScanlinesActive(parsed.scanlinesActive);
       }
+      const savedDiff = localStorage.getItem('neon_vectors_difficulty');
+      if (savedDiff && DIFFICULTY_CONFIG[savedDiff]) {
+        setDifficulty(savedDiff);
+        if (gameRef.current) gameRef.current.difficulty = savedDiff;
+      }
     } catch (e) {
       console.warn('LocalStorage error:', e);
     }
   }, []);
 
-  const saveProgression = (newUnlockedMax, newScores, newAttempts) => {
+  const saveProgression = (newUnlockedMax, newScores, newAttempts, targetDiff = difficulty) => {
     try {
       const payload = {
         unlockedSectorMax: newUnlockedMax !== undefined ? newUnlockedMax : unlockedSectorMax,
         highScores: newScores !== undefined ? newScores : highScores,
         attemptCount: newAttempts !== undefined ? newAttempts : attemptCount,
+        difficulty: targetDiff,
         soundMuted,
         scanlinesActive,
       };
       localStorage.setItem('neon_vectors_hell_protocol_v3', JSON.stringify(payload));
+      localStorage.setItem('neon_vectors_difficulty', targetDiff);
     } catch (e) {
       console.warn('LocalStorage save error:', e);
     }
+  };
+
+  const handleSetDifficulty = (newDiff) => {
+    if (!DIFFICULTY_CONFIG[newDiff]) return;
+    setDifficulty(newDiff);
+    audio.playDifficultySwitch();
+    saveProgression(unlockedSectorMax, highScores, attemptCount, newDiff);
+    const g = gameRef.current;
+    if (g) {
+      g.difficulty = newDiff;
+      const conf = DIFFICULTY_CONFIG[newDiff];
+      if (g.player) {
+        g.player.maxMidAirCharges = conf.maxMidAirCharges;
+        if (g.player.grounded) {
+          g.player.midAirCharges = conf.maxMidAirCharges;
+        } else {
+          g.player.midAirCharges = Math.min(g.player.midAirCharges, conf.maxMidAirCharges);
+        }
+        setHudMidAirCharges(g.player.midAirCharges);
+        addCombatText(`PROTOCOL: ${newDiff}`, g.player.x + 20, g.player.y - 25, conf.color, 18);
+      }
+    }
+  };
+
+  const cycleDifficulty = () => {
+    const tiers = ['EASY', 'NORMAL', 'HARD', 'HELL'];
+    const curIdx = tiers.indexOf(difficulty);
+    const nextDiff = tiers[(curIdx + 1) % tiers.length];
+    handleSetDifficulty(nextDiff);
   };
 
   /* =========================================================================
@@ -649,34 +790,213 @@ export default function App() {
      ========================================================================= */
   const spawnPatternAt = (startX) => {
     const g = gameRef.current;
+    const diff = g.difficulty || 'NORMAL';
+    const sectorId = (g.sector && g.sector.id) || 1;
     const topRail = g.corridorTop + (g.corridorBottom - g.corridorTop) * (g.squeezeFactor * 0.5);
     const bottomRail = g.corridorBottom - (g.corridorBottom - g.corridorTop) * (g.squeezeFactor * 0.5);
     const corridorH = bottomRail - topRail;
     const sectorColor = (g.sector && g.sector.themeColor) || '#00f3ff';
 
-    // Patterns available in every sector
-    const patterns = [
-      'sawtooth_gauntlet',
-      'pinch_and_saw',
-      'crusher_slalom',
-      'buzzsaw_corridor',
-      'inverter_spike_gate',
-      'drone_pincer',
-      'zerog_vacuum_hazard',
-      'singularity_crush'
-    ];
-    const pattern = patterns[Math.floor(Math.random() * patterns.length)];
+    // Patterns filtered by difficulty and progressive sector unlocks
+    let availablePatterns = [];
 
+    if (diff === 'EASY') {
+      // EASY (Chill / Casual): Simple spikes, slow drones, and Zero-G zones only
+      // NO Fake-Out Shifting Spikes, NO Forced Inverter Beams, NO crushing pistons!
+      availablePatterns = ['easy_spikes', 'easy_drone', 'easy_zerog'];
+    } else if (diff === 'NORMAL') {
+      // NORMAL (Balanced Arcade - Default): Progressive unlocks by sector
+      // Sector 1 = Spikes & Orbs
+      // Sector 2 = Buzzsaws
+      // Sector 3 = Zero-G & Pinch Gates
+      // Sector 4+ = Pistons, Drones, Inverter Beams, Singularity
+      if (sectorId === 1) {
+        availablePatterns = ['sawtooth_gauntlet', 'single_spike_hurdle'];
+      } else if (sectorId === 2) {
+        availablePatterns = ['sawtooth_gauntlet', 'buzzsaw_corridor', 'single_saw_jump'];
+      } else if (sectorId === 3) {
+        availablePatterns = ['sawtooth_gauntlet', 'buzzsaw_corridor', 'zerog_vacuum_hazard', 'pinch_and_saw'];
+      } else {
+        availablePatterns = [
+          'sawtooth_gauntlet',
+          'pinch_and_saw',
+          'crusher_slalom',
+          'buzzsaw_corridor',
+          'inverter_spike_gate',
+          'drone_pincer',
+          'zerog_vacuum_hazard',
+          'singularity_crush'
+        ];
+      }
+    } else if (diff === 'HARD') {
+      // HARD: Multi-trap combos with 0.5s telegraph warnings
+      availablePatterns = [
+        'sawtooth_gauntlet',
+        'pinch_and_saw',
+        'crusher_slalom',
+        'buzzsaw_corridor',
+        'inverter_spike_gate',
+        'drone_pincer',
+        'zerog_vacuum_hazard',
+        'singularity_crush'
+      ];
+    } else {
+      // HELL: All 12 traps from Sector 1 at extreme demon density
+      availablePatterns = [
+        'sawtooth_gauntlet',
+        'pinch_and_saw',
+        'crusher_slalom',
+        'buzzsaw_corridor',
+        'inverter_spike_gate',
+        'drone_pincer',
+        'zerog_vacuum_hazard',
+        'singularity_crush'
+      ];
+    }
+
+    const pattern = availablePatterns[Math.floor(Math.random() * availablePatterns.length)];
     let endX = startX;
 
     switch (pattern) {
-      // 1. Sawtooth Spike Gauntlet: 6 alternating spikes spaced 145px apart
-      case 'sawtooth_gauntlet': {
-        const spikeCount = 6;
-        const spacing = 145;
+      // EASY 1: Gentle spikes with wide breathing room (260px gap) and guide orbs
+      case 'easy_spikes': {
+        const spikeCount = 3;
+        const spacing = 260;
         for (let i = 0; i < spikeCount; i++) {
           const isCeil = i % 2 === 1;
-          const sH = 70 + Math.random() * 20;
+          const sH = 55;
+          g.obstacles.push({
+            type: 'sawtooth_spike',
+            x: startX + i * spacing,
+            y: isCeil ? topRail : bottomRail - sH,
+            width: 36,
+            height: sH,
+            isCeiling: isCeil,
+            color: '#10b981',
+          });
+
+          // Helpful Data Orb in flight arcs
+          g.orbs.push({
+            x: startX + i * spacing + spacing * 0.5,
+            y: isCeil ? bottomRail - 60 : topRail + 60,
+            radius: 12,
+          });
+        }
+        endX = startX + spikeCount * spacing;
+        break;
+      }
+
+      // EASY 2: Slow gentle drone with wide clearance
+      case 'easy_drone': {
+        const droneCenterY = topRail + corridorH * 0.5;
+        g.obstacles.push({
+          type: 'drone',
+          x: startX + 60,
+          y: droneCenterY,
+          width: 36,
+          height: 28,
+          centerY: droneCenterY,
+          amplitude: 25,
+          freq: 1.8,
+          phase: 0,
+          time: 0,
+          color: '#10b981',
+        });
+        g.orbs.push({
+          x: startX + 60,
+          y: topRail + 45,
+          radius: 12,
+        });
+        g.orbs.push({
+          x: startX + 60,
+          y: bottomRail - 45,
+          radius: 12,
+        });
+        endX = startX + 160;
+        break;
+      }
+
+      // EASY 3: Translucent purple Zero-G zone with guide orbs (NO buzzsaw)
+      case 'easy_zerog': {
+        const zWidth = 360;
+        g.zeroGZones.push({
+          x: startX,
+          y: topRail + 8,
+          width: zWidth,
+          height: corridorH - 16,
+        });
+        [0.25, 0.5, 0.75].forEach((pct, idx) => {
+          g.orbs.push({
+            x: startX + zWidth * pct,
+            y: topRail + corridorH * (idx === 1 ? 0.35 : 0.65),
+            radius: 12,
+          });
+        });
+        endX = startX + zWidth;
+        break;
+      }
+
+      // NORMAL SECTOR 1: Single spike hurdle with jump pad
+      case 'single_spike_hurdle': {
+        const isCeil = Math.random() > 0.5;
+        const sH = 65;
+        g.obstacles.push({
+          type: 'sawtooth_spike',
+          x: startX + 50,
+          y: isCeil ? topRail : bottomRail - sH,
+          width: 38,
+          height: sH,
+          isCeiling: isCeil,
+          color: sectorColor,
+        });
+        g.orbs.push({
+          x: startX + 50,
+          y: isCeil ? bottomRail - 70 : topRail + 70,
+          radius: 12,
+        });
+        // Jump Pad right behind it
+        g.jumpPads.push({
+          x: startX + 180,
+          y: isCeil ? topRail : bottomRail - 14,
+          width: 48,
+          height: 14,
+          isCeiling: isCeil,
+        });
+        endX = startX + 240;
+        break;
+      }
+
+      // NORMAL SECTOR 2: Single rotating buzzsaw with safe flight path
+      case 'single_saw_jump': {
+        const sawRadius = 24;
+        const isCeil = Math.random() > 0.5;
+        g.obstacles.push({
+          type: 'buzzsaw',
+          x: startX + 60,
+          y: isCeil ? topRail + sawRadius : bottomRail - sawRadius * 3,
+          width: sawRadius * 2,
+          height: sawRadius * 2,
+          radius: sawRadius,
+          rotation: 0,
+          trackType: 'center',
+          color: '#84cc16',
+        });
+        g.orbs.push({
+          x: startX + 60,
+          y: isCeil ? bottomRail - 60 : topRail + 60,
+          radius: 12,
+        });
+        endX = startX + 180;
+        break;
+      }
+
+      // 1. Sawtooth Spike Gauntlet (Scaled spacing by difficulty)
+      case 'sawtooth_gauntlet': {
+        const spikeCount = diff === 'NORMAL' ? 4 : 6;
+        const spacing = diff === 'NORMAL' ? 200 : 145;
+        for (let i = 0; i < spikeCount; i++) {
+          const isCeil = i % 2 === 1;
+          const sH = 68 + Math.random() * 15;
           g.obstacles.push({
             type: 'sawtooth_spike',
             x: startX + i * spacing,
@@ -692,7 +1012,7 @@ export default function App() {
             g.orbs.push({
               x: startX + i * spacing + spacing / 2,
               y: topRail + corridorH * 0.5,
-              radius: 11,
+              radius: 12,
             });
           }
         }
@@ -700,15 +1020,17 @@ export default function App() {
         break;
       }
 
-      // 2. Pinch Gate (110px center gap) followed immediately by a moving Buzzsaw
+      // 2. Pinch Gate: FAIR PATHFINDING GUARANTEE (>= 160px center gap + glowing Data Orb inside!)
       case 'pinch_and_saw': {
-        const spireH = (corridorH - 110) / 2;
+        const centerGap = Math.max(160, corridorH * 0.38);
+        const spireH = Math.max(40, (corridorH - centerGap) / 2);
+
         // Top Spire
         g.obstacles.push({
           type: 'pinch_spire',
           x: startX,
           y: topRail,
-          width: 44,
+          width: 42,
           height: spireH,
           isCeiling: true,
           color: '#ff003c',
@@ -718,23 +1040,23 @@ export default function App() {
           type: 'pinch_spire',
           x: startX,
           y: bottomRail - spireH,
-          width: 44,
+          width: 42,
           height: spireH,
           isCeiling: false,
           color: '#ff003c',
         });
-        // Jump Orb in the needle eye
+        // Mandatory Glowing Data Orb inside the needle eye to reset mid-air flip!
         g.orbs.push({
-          x: startX + 22,
+          x: startX + 21,
           y: topRail + corridorH * 0.5,
-          radius: 12,
+          radius: 13,
         });
 
-        // Buzzsaw immediately following
-        const sawRadius = 26;
+        // Buzzsaw following with safe clearance
+        const sawRadius = 25;
         g.obstacles.push({
           type: 'buzzsaw',
-          x: startX + 175,
+          x: startX + 185,
           y: topRail + corridorH * 0.5,
           width: sawRadius * 2,
           height: sawRadius * 2,
@@ -743,15 +1065,15 @@ export default function App() {
           trackType: 'vertical',
           topRail,
           bottomRail,
-          vy: 360,
+          vy: 320,
           color: '#84cc16',
         });
 
-        endX = startX + 230;
+        endX = startX + 245;
         break;
       }
 
-      // 3. Hydraulic Crusher Piston slamming block + Floor spike
+      // 3. Hydraulic Crusher Piston (with 0.5s telegraph warning) + Floor spike
       case 'crusher_slalom': {
         const isCeil = Math.random() > 0.5;
         g.obstacles.push({
@@ -760,7 +1082,7 @@ export default function App() {
           y: isCeil ? topRail : bottomRail - 60,
           width: 60,
           height: 60,
-          fullHeight: corridorH * 0.78,
+          fullHeight: corridorH * 0.72,
           isCeiling: isCeil,
           topRail,
           bottomRail,
@@ -769,38 +1091,43 @@ export default function App() {
           color: '#f59e0b',
         });
 
-        // Opposite spike right after crusher
-        const oppH = 75;
+        // Opposite spike spaced 180px away with an orb
+        const oppH = 70;
         g.obstacles.push({
           type: 'sawtooth_spike',
-          x: startX + 160,
+          x: startX + 180,
           y: isCeil ? bottomRail - oppH : topRail,
           width: 38,
           height: oppH,
           isCeiling: !isCeil,
           color: sectorColor,
         });
+        g.orbs.push({
+          x: startX + 180,
+          y: isCeil ? topRail + 60 : bottomRail - 60,
+          radius: 12,
+        });
 
         // Strobe gate
         g.obstacles.push({
           type: 'strobe_gate',
-          x: startX + 310,
+          x: startX + 330,
           y: topRail,
-          width: 26,
+          width: 24,
           height: corridorH,
           activeTimer: 0,
-          cycleDuration: 0.55,
+          cycleDuration: 0.65,
           isLethal: true,
           color: '#f59e0b',
         });
 
-        endX = startX + 350;
+        endX = startX + 370;
         break;
       }
 
       // 4. Buzzsaw Corridor (Top saw + Bottom saw + Center drone)
       case 'buzzsaw_corridor': {
-        const rad = 25;
+        const rad = 24;
         g.obstacles.push({
           type: 'buzzsaw',
           x: startX,
@@ -815,8 +1142,8 @@ export default function App() {
 
         g.obstacles.push({
           type: 'buzzsaw',
-          x: startX + 150,
-          y: bottomRail - rad,
+          x: startX + 160,
+          y: bottomRail - rad * 2.5,
           width: rad * 2,
           height: rad * 2,
           radius: rad,
@@ -827,23 +1154,34 @@ export default function App() {
 
         g.obstacles.push({
           type: 'drone',
-          x: startX + 300,
+          x: startX + 310,
           y: topRail + corridorH * 0.5,
           width: 38,
           height: 30,
           centerY: topRail + corridorH * 0.5,
-          amplitude: 45,
-          freq: 3.5,
+          amplitude: 40,
+          freq: 3.0,
           phase: 0,
           time: 0,
           color: '#10b981',
         });
 
-        endX = startX + 350;
+        g.orbs.push({
+          x: startX + 80,
+          y: bottomRail - 60,
+          radius: 12,
+        });
+        g.orbs.push({
+          x: startX + 235,
+          y: topRail + 60,
+          radius: 12,
+        });
+
+        endX = startX + 360;
         break;
       }
 
-      // 5. Inverter Laser Curtain + Shifting Fake-Out Spike
+      // 5. Inverter Laser Curtain + Shifting Fake-Out Spike (with 0.5s telegraph warning)
       case 'inverter_spike_gate': {
         g.obstacles.push({
           type: 'inverter_curtain',
@@ -858,7 +1196,7 @@ export default function App() {
         // Shifting fake-out spike right after forced flip
         g.obstacles.push({
           type: 'fakeout_spike',
-          x: startX + 150,
+          x: startX + 160,
           y: bottomRail - 70,
           width: 40,
           height: 70,
@@ -866,19 +1204,21 @@ export default function App() {
           topRail,
           bottomRail,
           triggered: false,
+          isTelegraphing: false,
+          telegraphTimer: 0,
           color: '#ec4899',
         });
 
-        // Yellow Jump Pad right behind it!
+        // Yellow Jump Pad right behind it
         g.jumpPads.push({
-          x: startX + 310,
+          x: startX + 320,
           y: bottomRail - 14,
           width: 50,
           height: 14,
           isCeiling: false,
         });
 
-        endX = startX + 370;
+        endX = startX + 380;
         break;
       }
 
@@ -888,13 +1228,13 @@ export default function App() {
         for (let d = 0; d < 2; d++) {
           g.obstacles.push({
             type: 'drone',
-            x: startX + d * 90,
+            x: startX + d * 95,
             y: droneCenterY + (d === 0 ? -45 : 45),
             width: 38,
             height: 30,
             centerY: droneCenterY + (d === 0 ? -45 : 45),
-            amplitude: 40,
-            freq: 3.2,
+            amplitude: 38,
+            freq: 3.0,
             phase: d * Math.PI,
             time: 0,
             color: '#10b981',
@@ -903,7 +1243,7 @@ export default function App() {
 
         g.obstacles.push({
           type: 'homing_mine',
-          x: startX + 220,
+          x: startX + 230,
           y: droneCenterY,
           width: 32,
           height: 32,
@@ -913,7 +1253,13 @@ export default function App() {
           color: '#ff003c',
         });
 
-        endX = startX + 260;
+        g.orbs.push({
+          x: startX + 140,
+          y: droneCenterY,
+          radius: 12,
+        });
+
+        endX = startX + 270;
         break;
       }
 
@@ -927,7 +1273,7 @@ export default function App() {
           height: corridorH - 16,
         });
 
-        const sawR = 26;
+        const sawR = 25;
         g.obstacles.push({
           type: 'buzzsaw',
           x: startX + zWidth * 0.5,
@@ -943,31 +1289,31 @@ export default function App() {
         g.orbs.push({
           x: startX + zWidth * 0.25,
           y: topRail + corridorH * 0.35,
-          radius: 11,
+          radius: 12,
         });
         g.orbs.push({
           x: startX + zWidth * 0.75,
           y: topRail + corridorH * 0.65,
-          radius: 11,
+          radius: 12,
         });
 
         endX = startX + zWidth;
         break;
       }
 
-      // 8. Singularity Well & Dual Pinch Gate
+      // 8. Singularity Well & Alternating Spikes (FAIR PATHFINDING GUARANTEE: horizontal clearance >= 160px + orb)
       case 'singularity_crush': {
         g.blackHoles.push({
-          x: startX + 100,
+          x: startX + 110,
           y: topRail + corridorH * 0.5,
           radius: 24,
-          gravityRadius: 280,
-          pullStrength: 3200,
+          gravityRadius: 260,
+          pullStrength: 3000,
           rotation: 0,
           color: '#6366f1',
         });
 
-        const sH = 75;
+        const sH = 70;
         g.obstacles.push({
           type: 'sawtooth_spike',
           x: startX + 20,
@@ -979,7 +1325,7 @@ export default function App() {
         });
         g.obstacles.push({
           type: 'sawtooth_spike',
-          x: startX + 180,
+          x: startX + 190,
           y: bottomRail - sH,
           width: 38,
           height: sH,
@@ -987,12 +1333,19 @@ export default function App() {
           color: '#ff003c',
         });
 
-        endX = startX + 230;
+        // Orb in middle of singularity well
+        g.orbs.push({
+          x: startX + 105,
+          y: topRail + corridorH * 0.5,
+          radius: 12,
+        });
+
+        endX = startX + 240;
         break;
       }
 
       default: {
-        endX = startX + 150;
+        endX = startX + 160;
         break;
       }
     }
@@ -1014,7 +1367,7 @@ export default function App() {
   };
 
   /* =========================================================================
-     START / INITIALIZE SECTOR RUN (PRE-POPULATES SCREEN AT 0m)
+     START / INITIALIZE SECTOR RUN (WITH SPAWN SAFE ZONE & DYNAMIC DIFFICULTY)
      ========================================================================= */
   const startSectorRun = useCallback((sectorIndex) => {
     const sector = SECTORS[sectorIndex] || SECTORS[0];
@@ -1026,9 +1379,13 @@ export default function App() {
     const corridorTop = 70;
     const corridorBottom = h - 70;
 
+    const diffConfig = DIFFICULTY_CONFIG[difficulty || 'NORMAL'];
+    const startShield = diffConfig.startShieldTime || 0;
+
     gameRef.current = {
       active: true,
       sector,
+      difficulty,
       width: w,
       height: h,
       corridorTop,
@@ -1045,7 +1402,8 @@ export default function App() {
         baseGravity: 5400,
         maxVy: 1440,
         grounded: true,
-        midAirCharge: true,
+        midAirCharges: diffConfig.maxMidAirCharges,
+        maxMidAirCharges: diffConfig.maxMidAirCharges,
         scaleX: 1,
         scaleY: 1,
         tilt: 0,
@@ -1078,7 +1436,7 @@ export default function App() {
       empEnergy: 0,
       empShockwave: null,
 
-      shieldTime: 0,
+      shieldTime: startShield,
       slowMoTime: 0,
       magnetTime: 0,
 
@@ -1099,11 +1457,24 @@ export default function App() {
 
     initStarfield(w, h);
 
-    // RULE 2: PRE-POPULATE THE SCREEN AT 0m (NO EMPTY START)
-    // Starting from x = 450 all the way to w + 800 so 8-14 traps are visible the instant you spawn!
-    let currentX = 450;
+    // RULE 2: MANDATORY SPAWN SAFE ZONE (NO DYING AT 9 METERS!)
+    // When a level starts or restarts (0m), DO NOT spawn any traps before x = 950px!
+    // Give the player a clean 1.5-second runway at the start of every attempt to get their bearings.
+    // Pre-populate starting runway with introductory Data Orbs to calibrate rhythm
+    [380, 560, 720, 860].forEach((ox, idx) => {
+      const oY = idx % 2 === 0 ? corridorBottom - 55 : corridorTop + 55;
+      gameRef.current.orbs.push({
+        x: ox,
+        y: oY,
+        radius: 12,
+      });
+    });
+
+    // Populate traps starting strictly at x = 950px!
+    let currentX = 950;
     while (currentX < w + 800) {
-      currentX = spawnPatternAt(currentX) + (140 + Math.random() * 50);
+      const gap = diffConfig.minGap + Math.random() * (diffConfig.maxGap - diffConfig.minGap);
+      currentX = spawnPatternAt(currentX) + gap;
     }
 
     lastTimeRef.current = performance.now();
@@ -1113,12 +1484,16 @@ export default function App() {
     setHudMultiplier(1);
     setHudEmpPercent(0);
     setHudDashCooldown(0);
-    setHudShieldTime(0);
+    setHudShieldTime(Math.ceil(startShield));
     setHudSlowMoTime(0);
     setHudMagnetTime(0);
-    setHudMidAirReady(true);
+    setHudMidAirCharges(diffConfig.maxMidAirCharges);
     setHudGravityDir(1);
-  }, []);
+
+    if (startShield > 0) {
+      addCombatText('CASUAL PHASE SHIELD ACTIVE', 180, corridorBottom - 50, '#10b981', 18);
+    }
+  }, [difficulty]);
 
   /* =========================================================================
      GRAVITY INVERSION
@@ -1137,17 +1512,18 @@ export default function App() {
       p.scaleY = 1.35;
       audio.playFlip(p.gravityDir < 0);
       spawnSparkBurst(p.x + p.width / 2, p.y + (p.gravityDir > 0 ? 0 : p.height), 12, '#00f3ff');
-    } else if (p.midAirCharge) {
+    } else if (p.midAirCharges > 0) {
+      p.midAirCharges--;
       p.gravityDir *= -1;
-      p.midAirCharge = false;
       p.vy = p.gravityDir * 680;
       p.scaleX = 0.7;
       p.scaleY = 1.4;
       audio.playMidAirFlip();
       triggerShake(7);
-      addCombatText('MID-AIR FLIP!', p.x + 20, p.y - 18, '#a855f7', 15);
+      const remainingLabel = p.midAirCharges > 0 ? `MID-AIR FLIP (${p.midAirCharges} LEFT)` : 'MID-AIR FLIP!';
+      addCombatText(remainingLabel, p.x + 20, p.y - 18, '#a855f7', 15);
       spawnSparkBurst(p.x + p.width / 2, p.y + p.height / 2, 20, '#a855f7');
-      setHudMidAirReady(false);
+      setHudMidAirCharges(p.midAirCharges);
     } else {
       addCombatText('DISCHARGED', p.x + 20, p.y - 18, '#ff003c', 13);
       return;
@@ -1404,7 +1780,8 @@ export default function App() {
           dt *= 0.15;
         }
 
-        let currentSpeed = g.baseScrollSpeed;
+        const diffConfig = DIFFICULTY_CONFIG[g.difficulty || 'NORMAL'];
+        let currentSpeed = g.baseScrollSpeed * diffConfig.speedMultiplier;
         if (g.sector && g.sector.id === 11) {
           currentSpeed *= 1 + (g.distance / 2000) * 0.85;
         }
@@ -1431,8 +1808,7 @@ export default function App() {
           if (g.comboTimer <= 0) g.comboMultiplier = 1;
         }
 
-        // RULE 4: DISTANCE SCALING
-        // 800m takes 45-55 seconds of bullet-hell survival
+        // Distance Scaling calibrated by speed
         const distanceDelta = (currentSpeed * dt) * 0.028;
         g.distance += distanceDelta;
 
@@ -1452,8 +1828,7 @@ export default function App() {
           };
         }
 
-        // RULE 1: HARD GUARANTEE: MINIMUM 8 TO 14 ACTIVE TRAPS ON SCREEN AT ALL TIMES
-        // There is NEVER a gap wider than 220px anywhere on screen
+        // DYNAMIC OBSTACLE SPAWNER (SCALED BY DIFFICULTY GAPS)
         if (!g.warpGate) {
           let maxRightX = g.obstacles.reduce(
             (max, ob) => Math.max(max, ob.x + (ob.width || 45)),
@@ -1461,7 +1836,8 @@ export default function App() {
           );
 
           while (maxRightX < g.width + 600) {
-            const spawnAtX = maxRightX + 140 + Math.random() * 60; // 140px to 200px gap
+            const gap = diffConfig.minGap + Math.random() * (diffConfig.maxGap - diffConfig.minGap);
+            const spawnAtX = maxRightX + gap;
             maxRightX = spawnPatternAt(spawnAtX);
           }
         }
@@ -1510,9 +1886,9 @@ export default function App() {
           }
           if (p.gravityDir === -1) {
             p.grounded = true;
-            if (!p.midAirCharge) {
-              p.midAirCharge = true;
-              setHudMidAirReady(true);
+            if (p.midAirCharges < p.maxMidAirCharges) {
+              p.midAirCharges = p.maxMidAirCharges;
+              setHudMidAirCharges(p.midAirCharges);
               spawnSparkBurst(p.x + p.width / 2, topRail + 8, 8, '#00f3ff');
             }
           }
@@ -1530,9 +1906,9 @@ export default function App() {
           }
           if (p.gravityDir === 1) {
             p.grounded = true;
-            if (!p.midAirCharge) {
-              p.midAirCharge = true;
-              setHudMidAirReady(true);
+            if (p.midAirCharges < p.maxMidAirCharges) {
+              p.midAirCharges = p.maxMidAirCharges;
+              setHudMidAirCharges(p.midAirCharges);
               spawnSparkBurst(p.x + p.width / 2, bottomRail - 8, 8, '#00f3ff');
             }
           }
@@ -1574,8 +1950,8 @@ export default function App() {
             triggerShake(12);
             p.gravityDir *= -1;
             p.vy = p.gravityDir * 950;
-            p.midAirCharge = true;
-            setHudMidAirReady(true);
+            p.midAirCharges = p.maxMidAirCharges;
+            setHudMidAirCharges(p.midAirCharges);
             setHudGravityDir(p.gravityDir);
             addCombatText('JUMP PAD BOOST!', pad.x, pad.y - 20, '#fbbf24', 18);
             spawnSparkBurst(pad.x + pad.width / 2, pad.y, 25, '#fbbf24');
@@ -1621,9 +1997,9 @@ export default function App() {
             obs.isLethal = obs.activeTimer < obs.cycleDuration * 0.55;
           } else if (obs.type === 'crusher') {
             const playerDist = obs.x - p.x;
-            if (playerDist < 360 && obs.state === 'idle') {
+            if (playerDist < 380 && obs.state === 'idle') {
               obs.state = 'telegraph';
-              obs.stateTimer = 0.22;
+              obs.stateTimer = 0.5; // 0.5s telegraph warning
               audio.playPistonSlam();
             } else if (obs.state === 'telegraph') {
               obs.stateTimer -= dt;
@@ -1635,7 +2011,7 @@ export default function App() {
               }
             } else if (obs.state === 'slam') {
               obs.stateTimer += dt;
-              if (obs.stateTimer > 0.4) {
+              if (obs.stateTimer > 0.45) {
                 obs.state = 'retract';
               }
             } else if (obs.state === 'retract') {
@@ -1645,14 +2021,22 @@ export default function App() {
               obs.y = bottomRail - obs.height;
             }
           } else if (obs.type === 'fakeout_spike') {
-            if (!obs.triggered && obs.x - p.x < 280) {
-              obs.triggered = true;
-              obs.isCeiling = true;
-              obs.y = topRail;
-              triggerShake(8);
-              audio.playInverterZap();
-              addCombatText('FAKE-OUT SHIFT!', obs.x, obs.y + 40, '#ec4899', 14);
-              spawnSparkBurst(obs.x + obs.width / 2, obs.y, 18, '#ec4899');
+            const playerDist = obs.x - p.x;
+            if (!obs.triggered && playerDist < 360 && !obs.isTelegraphing) {
+              obs.isTelegraphing = true;
+              obs.telegraphTimer = 0.5; // 0.5s telegraph warning
+            } else if (obs.isTelegraphing && !obs.triggered) {
+              obs.telegraphTimer -= dt;
+              if (obs.telegraphTimer <= 0) {
+                obs.triggered = true;
+                obs.isTelegraphing = false;
+                obs.isCeiling = true;
+                obs.y = topRail;
+                triggerShake(8);
+                audio.playInverterZap();
+                addCombatText('FAKE-OUT SHIFT!', obs.x, obs.y + 40, '#ec4899', 14);
+                spawnSparkBurst(obs.x + obs.width / 2, obs.y, 18, '#ec4899');
+              }
             }
           } else if (obs.type === 'inverter_curtain') {
             if (!obs.triggered && p.x + p.width > obs.x && p.x < obs.x + obs.width) {
@@ -1763,8 +2147,8 @@ export default function App() {
               g.comboTimer = 3.5;
               g.empEnergy = Math.min(100, g.empEnergy + 8);
 
-              p.midAirCharge = true;
-              setHudMidAirReady(true);
+              p.midAirCharges = p.maxMidAirCharges;
+              setHudMidAirCharges(p.midAirCharges);
 
               const pts = 100 * g.comboMultiplier;
               g.score += pts;
@@ -1840,7 +2224,7 @@ export default function App() {
           setHudShieldTime(Math.ceil(g.shieldTime));
           setHudSlowMoTime(Math.ceil(g.slowMoTime));
           setHudMagnetTime(Math.ceil(g.magnetTime));
-          setHudMidAirReady(p.midAirCharge);
+          setHudMidAirCharges(p.midAirCharges);
         }
       }
 
@@ -2006,6 +2390,33 @@ export default function App() {
           }
           ctx.closePath();
           ctx.fill();
+
+          // Telegraph for Fake-Out Shifting Spike
+          if (obs.type === 'fakeout_spike' && obs.isTelegraphing) {
+            ctx.save();
+            ctx.strokeStyle = 'rgba(236, 72, 153, 0.85)';
+            ctx.setLineDash([4, 4]);
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(obs.x, topRail);
+            ctx.lineTo(obs.x + obs.width, topRail);
+            ctx.lineTo(obs.x + obs.width / 2, topRail + obs.height);
+            ctx.closePath();
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            ctx.strokeStyle = 'rgba(236, 72, 153, 0.45)';
+            ctx.beginPath();
+            ctx.moveTo(obs.x + obs.width / 2, obs.y);
+            ctx.lineTo(obs.x + obs.width / 2, topRail + obs.height);
+            ctx.stroke();
+
+            ctx.font = '700 11px Orbitron, sans-serif';
+            ctx.fillStyle = '#ec4899';
+            ctx.textAlign = 'center';
+            ctx.fillText('SHIFTING ⚠️', obs.x + obs.width / 2, topRail + obs.height + 15);
+            ctx.restore();
+          }
         } else if (obs.type === 'buzzsaw') {
           ctx.translate(obs.x + obs.radius, obs.y + obs.radius);
           ctx.rotate(obs.rotation);
@@ -2042,7 +2453,7 @@ export default function App() {
           ctx.strokeRect(obs.x, obs.y, obs.width, obs.height);
 
           if (obs.state === 'telegraph') {
-            ctx.strokeStyle = 'rgba(255, 0, 60, 0.75)';
+            ctx.strokeStyle = 'rgba(245, 158, 11, 0.85)';
             ctx.setLineDash([4, 4]);
             ctx.beginPath();
             ctx.moveTo(obs.x + obs.width / 2, topRail);
@@ -2050,10 +2461,10 @@ export default function App() {
             ctx.stroke();
             ctx.setLineDash([]);
 
-            ctx.font = '900 20px Orbitron, sans-serif';
-            ctx.fillStyle = '#ff003c';
+            ctx.font = '900 18px Orbitron, sans-serif';
+            ctx.fillStyle = '#f59e0b';
             ctx.textAlign = 'center';
-            ctx.fillText('!', obs.x + obs.width / 2, obs.y + obs.height / 2 + 7);
+            ctx.fillText('CRUSH ⚠️', obs.x + obs.width / 2, obs.isCeiling ? topRail + 40 : bottomRail - 30);
           }
         } else if (obs.type === 'inverter_curtain') {
           ctx.shadowColor = obs.color;
@@ -2263,10 +2674,10 @@ export default function App() {
       ctx.closePath();
       ctx.fill();
 
-      if (p.midAirCharge) {
-        ctx.strokeStyle = '#00f3ff';
+      if (p.midAirCharges > 0) {
+        ctx.strokeStyle = p.midAirCharges >= 2 ? '#10b981' : '#00f3ff';
         ctx.lineWidth = 1.8;
-        ctx.shadowColor = '#00f3ff';
+        ctx.shadowColor = p.midAirCharges >= 2 ? '#10b981' : '#00f3ff';
         ctx.shadowBlur = 12;
 
         const ringAngle = frameCount * 0.08;
@@ -2274,13 +2685,24 @@ export default function App() {
         ctx.ellipse(0, 0, p.width * 0.75, p.height * 0.75, ringAngle, 0, Math.PI * 2);
         ctx.stroke();
 
-        for (let s = 0; s < 2; s++) {
-          const sAngle = ringAngle + s * Math.PI;
-          const sx = Math.cos(sAngle) * (p.width * 0.75);
-          const sy = Math.sin(sAngle) * (p.height * 0.75);
-          ctx.fillStyle = '#ffffff';
+        if (p.midAirCharges >= 2) {
+          ctx.strokeStyle = '#00f3ff';
+          ctx.shadowColor = '#00f3ff';
           ctx.beginPath();
-          ctx.arc(sx, sy, 3.5, 0, Math.PI * 2);
+          ctx.ellipse(0, 0, p.width * 0.95, p.height * 0.95, -ringAngle * 1.2, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+
+        const satCount = p.midAirCharges >= 2 ? 4 : 2;
+        for (let s = 0; s < satCount; s++) {
+          const sAngle = ringAngle + (s * (Math.PI * 2 / satCount));
+          const rW = s % 2 === 0 ? p.width * 0.75 : p.width * 0.95;
+          const rH = s % 2 === 0 ? p.height * 0.75 : p.height * 0.95;
+          const sx = Math.cos(sAngle) * rW;
+          const sy = Math.sin(sAngle) * rH;
+          ctx.fillStyle = s % 2 === 0 ? '#ffffff' : (p.midAirCharges >= 2 ? '#10b981' : '#00f3ff');
+          ctx.beginPath();
+          ctx.arc(sx, sy, 3, 0, Math.PI * 2);
           ctx.fill();
         }
       }
@@ -2351,6 +2773,7 @@ export default function App() {
   }, [gameState, handlePlayerDeath, handleSectorCleared]);
 
   const activeSector = SECTORS[currentSectorIndex] || SECTORS[0];
+  const diffConfig = DIFFICULTY_CONFIG[difficulty || 'NORMAL'];
   const warpPercent = Math.min(
     100,
     activeSector.targetDistance === Infinity
@@ -2364,7 +2787,7 @@ export default function App() {
           TOP RESPONSIVE HUD BAR
           =================================================================== */}
       <header className="relative z-20 flex items-center justify-between px-3 sm:px-4 py-2 bg-[#050510]/85 backdrop-blur-md border-b border-cyan-500/20">
-        <div className="flex items-center space-x-2 sm:space-x-3">
+        <div className="flex items-center space-x-2 sm:space-x-2.5">
           <div
             className="flex items-center space-x-1.5 px-2.5 py-0.5 rounded clip-cyber-tag font-orbitron text-xs font-bold tracking-wider"
             style={{
@@ -2376,6 +2799,17 @@ export default function App() {
             <span className="w-2 h-2 rounded-full animate-ping" style={{ backgroundColor: activeSector.themeColor }} />
             <span>{activeSector.code}</span>
           </div>
+
+          {/* Quick Difficulty Toggle Button in Top HUD */}
+          <button
+            onClick={cycleDifficulty}
+            title="Click to Switch Difficulty (EASY / NORMAL / HARD / HELL)"
+            className={`flex items-center space-x-1.5 px-2.5 py-0.5 rounded clip-cyber-tag font-orbitron text-xs font-bold transition-all cursor-pointer border ${diffConfig.badgeClass} hover:brightness-125 ${diffConfig.glowClass}`}
+          >
+            <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ backgroundColor: diffConfig.color }} />
+            <span>{diffConfig.name}</span>
+            <span className="text-[10px] font-mono-code opacity-75">({diffConfig.speedMultiplier}x)</span>
+          </button>
 
           <div className="hidden sm:flex items-center space-x-1 px-2 py-0.5 rounded bg-slate-900/70 border border-slate-700/60 text-xs">
             <span className="text-slate-400">POLARITY:</span>
@@ -2389,15 +2823,26 @@ export default function App() {
             <span>ATTEMPT #{attemptCount}</span>
           </div>
 
+          {/* Mid-Air Flip Charges with Dynamic Dots */}
           <div
             className={`hidden md:flex items-center space-x-1 px-2 py-0.5 rounded border text-xs font-mono-code transition-colors ${
-              hudMidAirReady
+              hudMidAirCharges > 0
                 ? 'bg-cyan-500/10 border-cyan-400/50 text-cyan-300'
                 : 'bg-red-500/10 border-red-500/30 text-red-400'
             }`}
           >
-            <Sparkles className="w-3 h-3" />
-            <span>MID-AIR: {hudMidAirReady ? 'READY' : 'RESET ON ORB'}</span>
+            <Sparkles className="w-3 h-3 text-cyan-400" />
+            <span>
+              FLIP:{' '}
+              {hudMidAirCharges > 0 ? (
+                <span className="font-bold text-cyan-300 tracking-wider">
+                  {'●'.repeat(hudMidAirCharges)}
+                  {'○'.repeat(Math.max(0, diffConfig.maxMidAirCharges - hudMidAirCharges))} READY
+                </span>
+              ) : (
+                <span className="text-red-400">DISCHARGED (ORB RESET)</span>
+              )}
+            </span>
           </div>
         </div>
 
@@ -2592,6 +3037,57 @@ export default function App() {
               </button>
             </div>
 
+            {/* Difficulty Protocol Selector (4 Tiers) */}
+            <div className="mb-5 p-3.5 sm:p-4 rounded-xl bg-slate-950/80 border border-cyan-500/30">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-3 gap-1">
+                <div className="flex items-center space-x-2">
+                  <span className="text-xs font-orbitron font-bold text-slate-300 tracking-wider">
+                    DIFFICULTY PROTOCOL:
+                  </span>
+                  <span className={`px-2 py-0.5 rounded text-[11px] font-orbitron font-bold border ${diffConfig.badgeClass}`}>
+                    {diffConfig.name} // {diffConfig.label}
+                  </span>
+                </div>
+                <span className="text-[11px] font-mono-code text-slate-400">
+                  Switch anytime in Start Menu or Top HUD
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                {Object.values(DIFFICULTY_CONFIG).map((tier) => {
+                  const isSelected = difficulty === tier.key;
+                  return (
+                    <button
+                      key={tier.key}
+                      onClick={() => handleSetDifficulty(tier.key)}
+                      className={`p-3 rounded-lg border text-left transition-all cursor-pointer relative flex flex-col justify-between ${
+                        isSelected
+                          ? `${tier.badgeClass} ${tier.glowClass} scale-[1.02] bg-slate-900/90 ring-1 ring-white/20`
+                          : 'border-slate-800 bg-slate-900/40 text-slate-400 hover:border-slate-700 hover:text-slate-200'
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="font-orbitron font-black text-sm tracking-wider" style={{ color: tier.color }}>
+                            {tier.name}
+                          </span>
+                          <span className="text-[10px] font-mono-code font-bold px-1.5 py-0.5 rounded bg-black/50 text-slate-300">
+                            {tier.speedMultiplier}x SPEED
+                          </span>
+                        </div>
+                        <div className="text-xs font-semibold text-slate-200">{tier.label}</div>
+                        <div className="text-[11px] text-slate-400 mt-1 leading-snug">{tier.description}</div>
+                      </div>
+                      <div className="mt-2.5 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[10px] font-mono-code">
+                        <span className="text-slate-400">GAP: {tier.minGap}-{tier.maxGap}px</span>
+                        <span style={{ color: tier.color }} className="font-bold">{tier.tag}</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 mb-5">
               {SECTORS.map((sec, idx) => {
                 const isUnlocked = allSectorsUnlocked || idx === 0 || idx < unlockedSectorMax;
@@ -2743,6 +3239,17 @@ export default function App() {
               <span>TOTAL DEATHS ON PROTOCOL: {attemptCount}</span>
             </div>
 
+            <div className="my-1.5 flex items-center justify-center space-x-2">
+              <span className="text-[10px] text-slate-400 font-mono-code">DIFFICULTY:</span>
+              <button
+                onClick={cycleDifficulty}
+                className={`px-3 py-0.5 rounded-full border text-xs font-orbitron font-bold cursor-pointer transition-all ${diffConfig.badgeClass} ${diffConfig.glowClass} hover:brightness-125`}
+                title="Click to Switch Difficulty (EASY / NORMAL / HARD / HELL)"
+              >
+                {diffConfig.name} ({diffConfig.speedMultiplier}x) ▾
+              </button>
+            </div>
+
             <div className="my-4 p-4 rounded-lg bg-slate-950/80 border border-red-900/40 grid grid-cols-2 gap-3 text-left">
               <div>
                 <span className="text-[10px] text-slate-400 font-mono-code">DISTANCE</span>
@@ -2794,7 +3301,18 @@ export default function App() {
             <h2 className="text-xl font-orbitron font-black text-cyan-400 tracking-wider mb-1">
               SIMULATION PAUSED
             </h2>
-            <p className="text-slate-400 text-xs font-mono-code mb-4">{activeSector.name}</p>
+            <p className="text-slate-400 text-xs font-mono-code mb-2">{activeSector.name}</p>
+
+            <div className="mb-4 flex items-center justify-center space-x-2">
+              <span className="text-[10px] text-slate-400 font-mono-code">DIFFICULTY:</span>
+              <button
+                onClick={cycleDifficulty}
+                className={`px-3 py-0.5 rounded-full border text-xs font-orbitron font-bold cursor-pointer transition-all ${diffConfig.badgeClass} ${diffConfig.glowClass} hover:brightness-125`}
+                title="Click to Switch Difficulty (EASY / NORMAL / HARD / HELL)"
+              >
+                {diffConfig.name} ({diffConfig.speedMultiplier}x) ▾
+              </button>
+            </div>
 
             <div className="flex flex-col space-y-2">
               <button
